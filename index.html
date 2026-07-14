@@ -791,14 +791,20 @@ function ensureZones(){
     zoneLayer.style.position='absolute'; zoneLayer.style.inset='0';
     board.appendChild(zoneLayer);
   }
-  zoneLayer.innerHTML='';
+  // Reuse existing zone elements across renders instead of tearing the whole
+  // layer down and rebuilding it every call — recreating #zone-stock etc. on
+  // every draw/recycle created a window where a fast tap could land on a node
+  // that had just been (or was about to be) detached, silently dropping the click.
   const mk=(id,x,y,extraClass)=>{
-    const el = document.createElement('div');
+    let el = document.getElementById(id);
+    if(!el){
+      el = document.createElement('div');
+      el.id = id;
+      zoneLayer.appendChild(el);
+    }
     el.className='zone '+(extraClass||'');
-    el.id=id;
     el.style.left=x+'px'; el.style.top=y+'px';
     el.style.width=layout.cw+'px'; el.style.height=layout.ch+'px';
-    zoneLayer.appendChild(el);
     return el;
   };
   mk('zone-stock', layout.stockPos.x, layout.stockPos.y, 'foundation-empty');
@@ -891,7 +897,7 @@ function renderAll(animate){
     } else if(card.pile==='stock'){
       pos = cardPos('stock');
       const idx = game.stock.indexOf(card);
-      visible = idx === game.stock.length-1 || true;
+      visible = idx === game.stock.length-1;
     } else if(card.pile==='waste'){
       const idx = game.waste.indexOf(card);
       if(!wasteVisible.has(idx)){ visible=false; pos = cardPos('waste'); }
@@ -1278,6 +1284,19 @@ function autoFinish(){
 let dragCtx = null;
 
 function attachInteractions(){
+  // Clear every interactive handler on every card first, then re-bind only
+  // what's valid for the current state. Without this, a card that was once
+  // interactive (e.g. the top of the waste pile) keeps its old
+  // onmousedown/ontouchstart handler even after it moves to a non-interactive
+  // pile — e.g. recycled face-down into the stock. Since that stale handler
+  // starts a drag and calls preventDefault(), it silently swallows the tap
+  // that should have reached the stock's own onclick, making the stock look
+  // permanently unresponsive after a recycle.
+  Object.values(cardEls).forEach(el=>{
+    el.onmousedown = null; el.ontouchstart = null;
+    el.ondblclick = null; el.oncontextmenu = null; el.onclick = null;
+  });
+
   // stock click
   const stockZone = document.getElementById('zone-stock');
   stockZone.onclick = drawFromStock;
@@ -1296,12 +1315,6 @@ function attachInteractions(){
         bindDraggable(el, c, {type:'tableau', col:ci, idx});
         el.ondblclick = ()=> tryAutoFoundation(c, {type:'tableau', col:ci});
         el.oncontextmenu = (e)=>{ e.preventDefault(); tryAutoFoundation(c, {type:'tableau', col:ci}); };
-      } else {
-        el.onmousedown=null; el.ontouchstart=null;
-        el.ondblclick=null;
-        if(idx===col.length-1){
-          el.onclick = ()=>{}; // face-down not interactive except last handled by flip via move? no auto
-        }
       }
     });
   }
