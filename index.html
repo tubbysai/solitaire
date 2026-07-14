@@ -1114,6 +1114,8 @@ function launchConfetti(){
 /* ============================================================
    HINT
 ============================================================ */
+let lastHintSuggestion = null;
+
 function findHint(){
   // 1. waste/tableau top -> foundation
   if(game.waste.length){
@@ -1127,7 +1129,9 @@ function findHint(){
       if(c.faceUp && canStackFoundation(c, game.foundations[c.suit])) return {type:'toFoundation', cardId:c.id};
     }
   }
-  // 2. tableau -> tableau moves that expose a face-down card or empty column, or general valid
+  // 2. tableau -> tableau moves. Collect all candidates so we can avoid immediately
+  // undoing the last hint we gave (two columns can otherwise ping-pong a card forever).
+  const candidates = [];
   for(let ci=0;ci<7;ci++){
     const col = game.tableau[ci];
     for(let idx=0; idx<col.length; idx++){
@@ -1140,10 +1144,16 @@ function findHint(){
         const targetTop = targetCol.length? topOf(targetCol): null;
         if(canStackTableau(c, targetTop)){
           if(idx===0 && !targetTop) continue; // pointless move: whole col to empty
-          return {type:'tableauMove', cardId:c.id, toCol:cj};
+          candidates.push({type:'tableauMove', cardId:c.id, toCol:cj, fromCol:ci});
         }
       }
     }
+  }
+  if(candidates.length){
+    const nonReversing = candidates.find(cand=> !(lastHintSuggestion && cand.cardId===lastHintSuggestion.cardId && cand.toCol===lastHintSuggestion.fromCol));
+    const chosen = nonReversing || candidates[0];
+    lastHintSuggestion = chosen;
+    return chosen;
   }
   // 3. waste -> tableau
   if(game.waste.length){
@@ -1163,6 +1173,7 @@ function findHint(){
 function showHint(){
   const hint = findHint();
   const toast = document.getElementById('hintToast');
+  clearHintHighlights();
   if(!hint){
     toast.textContent = 'No moves available — try Undo or a New Game.';
     toast.classList.add('show');
@@ -1174,17 +1185,53 @@ function showHint(){
     toast.classList.add('show');
     const stockEl = document.getElementById('zone-stock');
     stockEl.classList.add('glow');
-    setTimeout(()=>{ toast.classList.remove('show'); stockEl.classList.remove('glow'); }, 1800);
+    setTimeout(()=>{ toast.classList.remove('show'); clearHintHighlights(); }, 1800);
     return;
   }
-  const el = cardEls[hint.cardId];
-  if(el){
-    el.classList.add('hint-glow');
-    setTimeout(()=> el.classList.remove('hint-glow'), 1800);
+
+  // Glow every card in the moving group (not just the head) so it's clear what to
+  // grab, plus the destination zone, so the hint shows both ends of the move.
+  const movingIds = [hint.cardId];
+  if(hint.type==='tableauMove'){
+    const col = game.tableau.find(c=> c.some(card=>card.id===hint.cardId));
+    if(col){
+      const startIdx = col.findIndex(card=>card.id===hint.cardId);
+      for(let i=startIdx+1;i<col.length;i++) movingIds.push(col[i].id);
+    }
   }
-  toast.textContent = 'Try moving this highlighted card.';
+  movingIds.forEach(id=>{
+    const el = cardEls[id];
+    if(el) el.classList.add('hint-glow');
+  });
+
+  let destZoneId = null, destLabel = '';
+  if(hint.type==='toFoundation'){
+    const card = findCardById(hint.cardId);
+    destZoneId = 'zone-f-'+card.suit;
+    destLabel = 'up to the glowing foundation';
+  } else {
+    destZoneId = 'zone-t-'+hint.toCol;
+    destLabel = 'onto the glowing column';
+  }
+  const destEl = document.getElementById(destZoneId);
+  if(destEl) destEl.classList.add('glow');
+
+  toast.textContent = 'Move the highlighted card '+destLabel+'.';
   toast.classList.add('show');
-  setTimeout(()=>toast.classList.remove('show'), 1800);
+  setTimeout(()=>{ toast.classList.remove('show'); clearHintHighlights(); }, 1800);
+}
+
+function clearHintHighlights(){
+  document.querySelectorAll('.hint-glow').forEach(el=> el.classList.remove('hint-glow'));
+  document.querySelectorAll('.zone.glow').forEach(el=> el.classList.remove('glow'));
+}
+
+function findCardById(id){
+  for(const col of game.tableau){ const c = col.find(c=>c.id===id); if(c) return c; }
+  for(const s of SUITS){ const c = game.foundations[s].find(c=>c.id===id); if(c) return c; }
+  const w = game.waste.find(c=>c.id===id); if(w) return w;
+  const s2 = game.stock.find(c=>c.id===id); if(s2) return s2;
+  return null;
 }
 
 /* ============================================================
